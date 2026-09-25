@@ -6,6 +6,19 @@ import { storage } from './storage';
 
 const execPromise = util.promisify(exec);
 
+/**
+ * Memory-safe libx264 flags for low-RAM free/entry-level hosts.
+ *
+ * The default `preset fast` keeps multiple B-frame lookahead buffers and uses
+ * all cores, which easily exhausts ~512MB–1GB RAM when encoding 1080x1920 and
+ * gets the whole container OOM-killed (observed as a Render 502 + restart).
+ *
+ * `ultrafast` uses a single reference frame and no lookahead; combined with
+ * `-threads 1` it keeps peak RSS low enough to survive on small instances while
+ * still producing fully valid, standard H.264 output.
+ */
+const MEM_SAFE_VIDEO_ARGS = '-preset ultrafast -x264-params "rc-lookahead=0:sync-lookahead=0:ref=1:bframes=0" -tune zerolatency';
+
 export interface FFmpegProgress {
   percent: number;
   stage: string;
@@ -40,7 +53,7 @@ export class FFmpegEngine {
     const posterPath = path.join(this.outputDir, 'test_output_poster.jpg');
 
     const vf = 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2';
-    const cmd = `ffmpeg -y -ss 0 -t 5 -i "${inputPath}" -vf "${vf}" -c:v libx264 -profile:v baseline -level 3.1 -preset fast -pix_fmt yuv420p -c:a aac -movflags +faststart "${outputPath}"`;
+    const cmd = `ffmpeg -y -ss 0 -t 5 -i "${inputPath}" -vf "${vf}" -c:v libx264 -profile:v baseline -level 3.1 ${MEM_SAFE_VIDEO_ARGS} -pix_fmt yuv420p -c:a aac -movflags +faststart -threads 1 "${outputPath}"`;
     await execPromise(cmd);
 
     // Extract poster frame
@@ -69,7 +82,7 @@ export class FFmpegEngine {
     const posterPath = path.join(this.outputDir, 'test_effects_poster.jpg');
 
     const filterComplex = `[0:v]setpts=(1/0.7)*PTS,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,zoompan=z='min(zoom+0.001,1.10)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=24[v];[0:a]atempo=0.7[a]`;
-    const cmd = `ffmpeg -y -ss 10 -t 5 -i "${inputPath}" -filter_complex "${filterComplex}" -map "[v]" -map "[a]" -c:v libx264 -profile:v baseline -level 3.1 -preset fast -pix_fmt yuv420p -c:a aac -movflags +faststart "${outputPath}"`;
+    const cmd = `ffmpeg -y -ss 10 -t 5 -i "${inputPath}" -filter_complex "${filterComplex}" -map "[v]" -map "[a]" -c:v libx264 -profile:v baseline -level 3.1 ${MEM_SAFE_VIDEO_ARGS} -pix_fmt yuv420p -c:a aac -movflags +faststart -threads 1 "${outputPath}"`;
     await execPromise(cmd);
 
     const posterCmd = `ffmpeg -y -ss 0.5 -i "${outputPath}" -vframes 1 -q:v 2 "${posterPath}"`;
@@ -96,7 +109,7 @@ export class FFmpegEngine {
     const posterPath = path.join(this.outputDir, 'test_text_poster.jpg');
 
     const vf = `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,drawtext=text='TEST CINEMATIC':fontcolor=white:fontsize=64:box=1:boxcolor=black@0.65:boxborderw=10:x=(w-text_w)/2:y=h*0.75:enable='between(t,2,4)'`;
-    const cmd = `ffmpeg -y -ss 0 -t 5 -i "${inputPath}" -vf "${vf}" -c:v libx264 -profile:v baseline -level 3.1 -preset fast -pix_fmt yuv420p -c:a aac -movflags +faststart "${outputPath}"`;
+    const cmd = `ffmpeg -y -ss 0 -t 5 -i "${inputPath}" -vf "${vf}" -c:v libx264 -profile:v baseline -level 3.1 ${MEM_SAFE_VIDEO_ARGS} -pix_fmt yuv420p -c:a aac -movflags +faststart -threads 1 "${outputPath}"`;
     await execPromise(cmd);
 
     const posterCmd = `ffmpeg -y -ss 2.5 -i "${outputPath}" -vframes 1 -q:v 2 "${posterPath}"`;
@@ -184,14 +197,17 @@ export class FFmpegEngine {
 
       const filterComplex = `[0:v]${videoSpeedFilter},${vf}[v];[0:a]${audioSpeedFilter},volume=${originalVolume}[a]`;
 
-      const clipCmd = `ffmpeg -y -ss ${sourceStart} -t ${sourceDuration} -i "${inputPath}" -filter_complex "${filterComplex}" -map "[v]" -map "[a]" -c:v libx264 -profile:v baseline -level 3.1 -preset fast -pix_fmt yuv420p -r 25 -c:a aac -ar 44100 -movflags +faststart "${segPath}"`;
+      // Memory-safe encode flags: single-threaded, ultrafast preset, no B-frame
+      // lookahead. 9:16 1080x1920 on low-RAM free hosts otherwise OOMs and the
+      // whole container is killed (Render 502).
+      const clipCmd = `ffmpeg -y -ss ${sourceStart} -t ${sourceDuration} -i "${inputPath}" -filter_complex "${filterComplex}" -map "[v]" -map "[a]" -c:v libx264 -profile:v baseline -level 3.1 ${MEM_SAFE_VIDEO_ARGS} -pix_fmt yuv420p -r 25 -c:a aac -b:a 128k -ar 44100 -movflags +faststart -threads 1 -filter_threads 1 -filter_complex_threads 1 "${segPath}"`;
 
       try {
         await execPromise(clipCmd);
         segmentFiles.push(segPath);
       } catch (clipErr: any) {
         console.warn(`Segment ${i} filter failed, falling back:`, clipErr.message);
-        const fallbackCmd = `ffmpeg -y -ss ${sourceStart} -t ${sourceDuration} -i "${inputPath}" -vf "${vf}" -c:v libx264 -profile:v baseline -level 3.1 -preset fast -pix_fmt yuv420p -r 25 -an -movflags +faststart "${segPath}"`;
+        const fallbackCmd = `ffmpeg -y -ss ${sourceStart} -t ${sourceDuration} -i "${inputPath}" -vf "${vf}" -c:v libx264 -profile:v baseline -level 3.1 ${MEM_SAFE_VIDEO_ARGS} -pix_fmt yuv420p -r 25 -an -movflags +faststart -threads 1 -filter_threads 1 -filter_complex_threads 1 "${segPath}"`;
         await execPromise(fallbackCmd);
         segmentFiles.push(segPath);
       }
@@ -211,7 +227,7 @@ export class FFmpegEngine {
     fs.writeFileSync(concatListPath, listContent);
 
     const concatenatedPath = path.join(sessionDir, 'concatenated.mp4');
-    const concatCmd = `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -c:v libx264 -profile:v baseline -level 3.1 -preset fast -pix_fmt yuv420p -r 25 -c:a aac -movflags +faststart "${concatenatedPath}"`;
+    const concatCmd = `ffmpeg -y -f concat -safe 0 -i "${concatListPath}" -c:v libx264 -profile:v baseline -level 3.1 ${MEM_SAFE_VIDEO_ARGS} -pix_fmt yuv420p -r 25 -c:a aac -b:a 128k -movflags +faststart -threads 1 "${concatenatedPath}"`;
     await execPromise(concatCmd);
 
     onProgress?.({ percent: 90, stage: 'Optimizing mobile streaming header & faststart...' });
