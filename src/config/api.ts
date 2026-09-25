@@ -3,8 +3,15 @@
  * Single source of truth for backend routes and upload pipeline
  */
 
+/**
+ * Default production backend (Render). Used as a hard fallback so EVERY network
+ * call in the app points at the deployed API even when VITE_API_BASE_URL is not
+ * injected at build time (or is injected as an empty string).
+ */
+export const DEFAULT_API_BASE_URL: string = 'https://fotbal-1.onrender.com';
+
 export const API_BASE_URL: string =
-  (import.meta.env.VITE_API_BASE_URL as string) || '';
+  (import.meta.env.VITE_API_BASE_URL as string) || DEFAULT_API_BASE_URL;
 
 export const UPLOAD_ENDPOINT: string = '/api/upload-video';
 

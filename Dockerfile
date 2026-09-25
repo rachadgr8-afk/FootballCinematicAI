@@ -29,8 +29,9 @@ RUN if [ -f package-lock.json ]; then \
 COPY . .
 
 # Monolithic deployment: the SPA and the API are served by the SAME Express
-# server, so the frontend must use relative URLs (no remote API base).
-ARG VITE_API_BASE_URL=""
+# server. The API base URL is pinned to the deployed Render backend so that every
+# fetch call targets it (can be overridden at build time if needed).
+ARG VITE_API_BASE_URL="https://fotbal-1.onrender.com"
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
 # 1) Build the static frontend -> /app/dist
