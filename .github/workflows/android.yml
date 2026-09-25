@@ -1,4 +1,3 @@
-
 name: Build APK
 
 on:
@@ -39,8 +38,7 @@ jobs:
         run: npx cap init "SAFI" com.safi.app --web-dir dist
 
       - name: Add Android platform
-  run: npx cap sync android
-
+        run: npx cap sync android
 
       - name: Add Internet permission
         run: |
