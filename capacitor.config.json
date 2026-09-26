@@ -1,14 +1,15 @@
 {
   "appId": "com.footballcinematic.ai",
-  "appName": "Football Cinematic AI",
+  "appName": "FootballCinematicAI",
   "webDir": "dist",
   "bundledWebRuntime": false,
-  "android": {
-    "allowMixedContent": true,
-    "backgroundColor": "#020617"
-  },
   "server": {
     "androidScheme": "https",
     "cleartext": true
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
   }
 }
